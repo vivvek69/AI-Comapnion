@@ -24,6 +24,29 @@ import speech_recognition as sr
 IS_WINDOWS = platform.system() == "Windows"
 
 
+def _find_webcam_mic() -> int | None:
+    """Scan microphone list and return the index of the webcam's built-in mic.
+
+    Matches names containing 'camera', 'webcam', 'usb', 'video', or 'cam'.
+    Returns None if not found, which makes sr.Microphone() fall back to the
+    system default.
+    """
+    keywords = ["camera", "webcam", "usb", "video", "cam"]
+    try:
+        names = sr.Microphone.list_microphone_names()
+        print("[MIC] Available microphones:")
+        for i, name in enumerate(names):
+            print(f"       [{i}] {name}")
+        for i, name in enumerate(names):
+            if any(kw in name.lower() for kw in keywords):
+                print(f"[MIC] Selected webcam mic: [{i}] {name}")
+                return i
+    except Exception as e:
+        print(f"[MIC] Could not list microphones: {e}")
+    print("[MIC] No webcam mic found — using system default")
+    return None
+
+
 def speak(text: str, rate: int = 145) -> None:
     """
     Speak text synchronously.
@@ -58,8 +81,9 @@ def listen(groq_client, whisper_model: str,
     recognizer.dynamic_energy_threshold = True
 
     # ── Step 1: capture microphone audio ─────────────────────────────────────
+    mic_index = None if IS_WINDOWS else _find_webcam_mic()
     try:
-        with sr.Microphone() as source:
+        with sr.Microphone(device_index=mic_index) as source:
             print("[LISTEN] Listening… speak now")
             recognizer.adjust_for_ambient_noise(source, duration=0.4)
             audio = recognizer.listen(

@@ -28,11 +28,12 @@ LONG_DURATION_MESSAGES: dict[str, str] = {
 
 # Groq LLM system prompt — personalised per emotion each session
 _SYSTEM_PROMPT = (
-    "You are a warm, empathetic AI companion. "
+    "You are a deeply empathetic AI companion who genuinely cares about people. "
     "The person in front of you is currently feeling {emotion}. "
-    "Keep every response concise (1–2 sentences). "
-    "Be emotionally supportive and end with a gentle follow-up question "
-    "to keep the conversation going."
+    "Listen carefully, validate their feelings, and respond with warmth and compassion. "
+    "Keep every response concise (2–3 sentences). "
+    "Never dismiss or minimize their emotions — always make them feel heard and understood. "
+    "End with a gentle, caring follow-up question to keep the conversation going."
 )
 
 
@@ -62,7 +63,7 @@ def get_ai_reply(groq_client, conversation_history: list,
         completion = groq_client.chat.completions.create(
             model=groq_model,
             messages=messages,
-            max_tokens=120,
+            max_tokens=150,
             temperature=0.7,
         )
         return completion.choices[0].message.content.strip()

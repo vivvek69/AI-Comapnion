@@ -44,7 +44,7 @@ LISTEN_TIMEOUT    = 5     # seconds to wait for speech before giving up
 PHRASE_TIME_LIMIT = 8     # max seconds of a single utterance
 
 # Max back-and-forth AI turns per emotion session
-CONVERSATION_LIMIT = 6
+CONVERSATION_LIMIT = 10
 
 # ── Display ───────────────────────────────────────────────────────────────────
 WINDOW_NAME = "AI Emotion Companion"

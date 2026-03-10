@@ -47,6 +47,16 @@ mkdir -p data
 export DISPLAY=${DISPLAY:-:0}
 export XAUTHORITY=${XAUTHORITY:-$HOME/.Xauthority}
 
+# Set up PulseAudio for speaker/mic passthrough into Docker
+mkdir -p ~/.config/pulse
+pactl load-module module-native-protocol-unix auth-anonymous=1 2>/dev/null || true
+echo "[AUDIO] Available audio sources (microphones):"
+pactl list short sources 2>/dev/null || echo "  (pactl not available)"
+
+# List detected cameras
+echo "[CAMERA] Detected video devices:"
+ls /dev/video* 2>/dev/null || echo "  (no /dev/video* found)"
+
 # Build and run
 echo "[BUILD] Building MoodBot Docker image..."
 $DOCKER_CMD compose up --build

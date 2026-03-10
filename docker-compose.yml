@@ -21,6 +21,7 @@ services:
       - DISPLAY=${DISPLAY:-:0}
       - XAUTHORITY=/root/.Xauthority
       - PULSE_SERVER=unix:/run/user/1000/pulse/native
+      - CAMERA_INDEX=0
 
     volumes:
       # X11 socket for GUI window
@@ -31,6 +32,8 @@ services:
       - /run/user/1000/pulse:/run/user/1000/pulse:rw
       # ALSA sound devices
       - /dev/snd:/dev/snd
+      # PulseAudio auth cookie (speaker output)
+      - ~/.config/pulse/cookie:/root/.config/pulse/cookie:ro
       # Persist emotion memory across container restarts
       - ./data:/app/data
 

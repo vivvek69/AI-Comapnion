@@ -12,7 +12,7 @@ FROM python:3.11-slim
 # Prevent interactive prompts during apt install
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System dependencies for OpenCV, PyAudio, espeak (TTS), GTK (imshow)
+# System dependencies for OpenCV, PyAudio, espeak (TTS), GTK (imshow), audio, fonts
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc python3-dev \
     libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
@@ -20,7 +20,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     portaudio19-dev \
     espeak-ng libespeak-ng1 \
     libasound2 libpulse0 \
+    alsa-utils libasound2-plugins \
+    fonts-dejavu-core \
+    v4l-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# Default PulseAudio ALSA routing (host PulseAudio is mounted at runtime)
+RUN echo 'pcm.!default { type pulse }' > /etc/asound.conf \
+ && echo 'ctl.!default { type pulse }' >> /etc/asound.conf
+
+# Default camera index — override with CAMERA_INDEX env var at runtime
+ENV CAMERA_INDEX=0
 
 WORKDIR /app
 
