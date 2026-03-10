@@ -37,11 +37,15 @@ if [ ! -f ".env" ]; then
     exit 1
 fi
 
-# Allow X11 connections from Docker
-xhost +local:docker 2>/dev/null || true
+# Allow X11 connections from Docker containers
+xhost +local: 2>/dev/null || true
 
 # Create data dir for persistent memory
 mkdir -p data
+
+# Export DISPLAY so sudo docker can see it
+export DISPLAY=${DISPLAY:-:0}
+export XAUTHORITY=${XAUTHORITY:-$HOME/.Xauthority}
 
 # Build and run
 echo "[BUILD] Building MoodBot Docker image..."
