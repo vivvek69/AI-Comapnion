@@ -22,15 +22,64 @@ import tempfile
 import speech_recognition as sr
 
 IS_WINDOWS = platform.system() == "Windows"
+IS_PI      = platform.machine() in ("armv7l", "aarch64")   # Raspberry Pi
 
-# ── Mic index cache ───────────────────────────────────────────────────────────
-# Scanned once at first listen() call so we don't enumerate devices every turn.
+# ALSA output device for the Bluetooth speaker (Pi only).
+# Mirrors config.py — defined here to avoid a circular import.
+BT_SPEAKER_ALSA_DEVICE = os.environ.get("BT_SPEAKER_ALSA_DEVICE", "bluealsa")
+
+# ── Mic index caches ──────────────────────────────────────────────────────────
+# Each scan runs only once per process; results are cached in module globals.
 _webcam_mic_index: int | None = None
 _mic_scanned: bool = False
+_pa_mic_index: int | None = None
+_pa_mic_scanned: bool = False
+
+
+def _find_usb_mic_pyaudio() -> int | None:
+    """Enumerate input devices with PyAudio and return the first USB mic index.
+
+    Searches for device names containing 'usb', 'camera', 'webcam', 'video',
+    or 'cam'.  Result is cached — the scan runs only once per process.
+    Returns None when no USB mic is detected or PyAudio is unavailable.
+    """
+    global _pa_mic_index, _pa_mic_scanned
+    if _pa_mic_scanned:
+        return _pa_mic_index
+
+    try:
+        import pyaudio
+    except ImportError:
+        print("[MIC/PA] PyAudio not installed — run: pip install pyaudio")
+        _pa_mic_scanned = True
+        return None
+
+    keywords = ["usb", "camera", "webcam", "video", "cam", "microphone"]
+    pa = pyaudio.PyAudio()
+    try:
+        count = pa.get_device_count()
+        print("[MIC/PA] Enumerating input devices via PyAudio:")
+        for i in range(count):
+            info = pa.get_device_info_by_index(i)
+            if info.get("maxInputChannels", 0) > 0:
+                name = info.get("name", "")
+                print(f"        [{i}] {name}")
+                if _pa_mic_index is None and any(k in name.lower() for k in keywords):
+                    print(f"[MIC/PA] ✓ Selected USB mic → [{i}] {name}")
+                    _pa_mic_index = i
+    except Exception as exc:
+        print(f"[MIC/PA] Enumeration error: {exc}")
+    finally:
+        pa.terminate()
+
+    if _pa_mic_index is None:
+        print("[MIC/PA] No USB mic found via PyAudio — will use system default")
+    _pa_mic_scanned = True
+    return _pa_mic_index
 
 
 def _find_webcam_mic() -> int | None:
-    """Scan microphone list once and return the index of the USB webcam's mic.
+    """Scan microphone list via SpeechRecognition and return the USB mic index.
 
     Searches for names containing 'camera', 'webcam', 'usb', 'video', or 'cam'.
     Result is cached — the scan only runs on the very first call.
@@ -48,13 +97,13 @@ def _find_webcam_mic() -> int | None:
             print(f"        [{i}] {name}")
         for i, name in enumerate(names):
             if any(kw in name.lower() for kw in keywords):
-                print(f"[MIC] ✓ Auto-selected USB webcam mic  → [{i}] {name}")
+                print(f"[MIC] ✓ Auto-selected USB mic → [{i}] {name}")
                 _webcam_mic_index = i
                 break
         if _webcam_mic_index is None:
-            print("[MIC] No USB webcam mic found — using system default")
-    except Exception as e:
-        print(f"[MIC] Could not enumerate microphones: {e}")
+            print("[MIC] No USB mic found via SpeechRecognition — using system default")
+    except Exception as exc:
+        print(f"[MIC] Could not enumerate microphones: {exc}")
 
     _mic_scanned = True
     return _webcam_mic_index
@@ -75,8 +124,36 @@ def speak(text: str, rate: int = 145) -> None:
         engine.say(text)
         engine.runAndWait()
         engine.stop()
+    elif IS_PI:
+        # Raspberry Pi — pipe espeak-ng stdout → aplay → Bluetooth speaker.
+        # espeak-ng --stdout writes raw PCM/WAV to stdout; aplay routes it to
+        # the BlueZ ALSA device (bluealsa) so audio reaches the BT speaker.
+        espeak_cmd = ["espeak-ng", "-s", str(rate), "-v", "en+f3", "--stdout", text]
+        try:
+            espeak_proc = subprocess.Popen(
+                espeak_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            aplay_result = subprocess.run(
+                ["aplay", "-D", BT_SPEAKER_ALSA_DEVICE, "-q"],
+                stdin=espeak_proc.stdout,
+                stderr=subprocess.PIPE,
+            )
+            espeak_proc.wait()
+            if aplay_result.returncode != 0:
+                err = aplay_result.stderr.decode(errors="replace").strip()
+                print(f"[TTS] BT speaker '{BT_SPEAKER_ALSA_DEVICE}' error: {err}")
+                print("[TTS] Falling back to default ALSA output")
+                subprocess.run(
+                    ["espeak-ng", "-s", str(rate), "-v", "en+f3", text],
+                    check=False,
+                )
+        except FileNotFoundError as exc:
+            print(f"[TTS] Command not found ({exc}) — install with:")
+            print("  sudo apt install espeak-ng alsa-utils")
     else:
-        # en+f3 = English female voice; -s = speed (words/min)
+        # Generic Linux desktop — en+f3 = English female voice; -s = speed (wpm)
         subprocess.run(
             ["espeak-ng", "-s", str(rate), "-v", "en+f3", text],
             check=False,
@@ -95,7 +172,16 @@ def listen(groq_client, whisper_model: str,
     recognizer.dynamic_energy_threshold = True
 
     # ── Step 1: capture microphone audio ─────────────────────────────────────
-    mic_index = None if IS_WINDOWS else _find_webcam_mic()
+    # On Pi: try PyAudio enumeration first (more reliable with USB mics),
+    # then fall back to SpeechRecognition scan, then use system default.
+    if IS_WINDOWS:
+        mic_index = None
+    elif IS_PI:
+        mic_index = _find_usb_mic_pyaudio()
+        if mic_index is None:
+            mic_index = _find_webcam_mic()
+    else:
+        mic_index = _find_webcam_mic()
     try:
         with sr.Microphone(device_index=mic_index) as source:
             print("\n[LISTENING] Adjusting for ambient noise…")

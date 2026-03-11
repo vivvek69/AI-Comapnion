@@ -11,7 +11,26 @@
 #       libgtk-3-dev libopencv-dev \
 #       portaudio19-dev python3-pyaudio \
 #       libjpeg-dev libpng-dev libtiff-dev \
-#       libcamera-apps
+#       alsa-utils libasound2-dev \
+#       bluez bluez-alsa-utils
+#
+# Bluetooth speaker setup (BlueZ + bluealsa):
+#   1. Pair and trust your speaker:
+#        bluetoothctl
+#        > scan on
+#        > pair AA:BB:CC:DD:EE:FF
+#        > trust AA:BB:CC:DD:EE:FF
+#        > connect AA:BB:CC:DD:EE:FF
+#   2. Start the bluealsa ALSA daemon:
+#        sudo systemctl enable --now bluealsa
+#   3. Verify the ALSA device is present:
+#        aplay -L | grep bluealsa
+#   4. (Optional) Set a specific MAC in your .env:
+#        BT_SPEAKER_ALSA_DEVICE=bluealsa:DEV=AA:BB:CC:DD:EE:FF,PROFILE=a2dp
+#
+# USB mic / webcam:
+#   - Plug in and run `arecord -l` to confirm the USB mic appears.
+#   - Run `v4l2-ctl --list-devices` to confirm the webcam is /dev/video0.
 #
 # Then:
 #   python3 -m venv venv
@@ -34,6 +53,11 @@ fer>=22.5.1                     # Pulls in tensorflow automatically
 # --- Speech Recognition ---
 SpeechRecognition>=3.10
 PyAudio>=0.2.14
+
+# --- ALSA / Bluetooth audio (Raspberry Pi) ---
+# pyalsaaudio provides direct ALSA control (optional, used for advanced routing).
+# The system package libasound2-dev must be installed first (see apt block above).
+pyalsaaudio>=0.10.0
 
 # --- TTS ---
 pyttsx3>=2.90                   # Uses espeak-ng backend on Pi

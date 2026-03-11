@@ -28,6 +28,7 @@
 """
 
 import os
+import subprocess
 import numpy as np
 import sys
 import time
@@ -50,10 +51,96 @@ from config import (
     CONVERSATION_LIMIT, WINDOW_NAME,
     MIN_CONFIDENCE,
     CAMERA_INDEX,
+    BT_SPEAKER_ALSA_DEVICE,
 )
 from emotion_detector import EmotionDetector, EMOTION_COLOURS
 from voice_io import speak, listen
 from ai_companion import get_greeting, get_long_duration_message, get_ai_reply
+
+# ── Device probe ───────────────────────────────────────────────────────────────
+
+def probe_devices() -> dict:
+    """
+    Probe the USB webcam (OpenCV/V4L2), USB microphone (PyAudio), and
+    Bluetooth speaker (ALSA/aplay) before the main loop starts.
+
+    Prints a human-readable status table and returns a dict:
+        {"webcam": bool, "mic": bool, "bt_speaker": bool}
+
+    Warnings are printed for missing devices but no exception is raised;
+    the main loop and conversation thread handle per-device absence gracefully.
+    """
+    results: dict = {
+        "webcam":     False,
+        "mic":        False,
+        "bt_speaker": not IS_PI,   # only probed on Raspberry Pi
+    }
+
+    # ── USB Webcam ────────────────────────────────────────────────────────────
+    try:
+        backend  = cv2.CAP_V4L2 if IS_PI else cv2.CAP_DSHOW
+        cap_test = cv2.VideoCapture(CAMERA_INDEX, backend)
+        if cap_test.isOpened():
+            ret, _frame = cap_test.read()
+            results["webcam"] = bool(ret and _frame is not None)
+        cap_test.release()
+    except Exception as exc:
+        print(f"[PROBE] Webcam error: {exc}")
+
+    # ── USB Microphone (PyAudio) ──────────────────────────────────────────────
+    try:
+        import pyaudio
+        keywords = ["usb", "camera", "webcam", "video", "cam", "microphone"]
+        pa = pyaudio.PyAudio()
+        try:
+            for i in range(pa.get_device_count()):
+                info = pa.get_device_info_by_index(i)
+                if info.get("maxInputChannels", 0) > 0:
+                    if any(k in info.get("name", "").lower() for k in keywords):
+                        results["mic"] = True
+                        break
+            # Fallback: accept any working default input device
+            if not results["mic"]:
+                try:
+                    pa.get_default_input_device_info()
+                    results["mic"] = True
+                except IOError:
+                    pass
+        finally:
+            pa.terminate()
+    except ImportError:
+        print("[PROBE] PyAudio not installed — run: pip install pyaudio")
+    except Exception as exc:
+        print(f"[PROBE] Microphone error: {exc}")
+
+    # ── Bluetooth Speaker via BlueZ/ALSA (Pi only) ────────────────────────────
+    if IS_PI:
+        try:
+            proc = subprocess.run(
+                ["aplay", "-L"],
+                capture_output=True, text=True, timeout=5,
+            )
+            # Match against the base device name (strip optional colon-params)
+            bt_prefix = BT_SPEAKER_ALSA_DEVICE.split(":")[0]
+            results["bt_speaker"] = bt_prefix in proc.stdout
+        except FileNotFoundError:
+            print("[PROBE] 'aplay' not found — run: sudo apt install alsa-utils")
+        except Exception as exc:
+            print(f"[PROBE] BT speaker probe error: {exc}")
+
+    # ── Status table ──────────────────────────────────────────────────────────
+    def _s(ok: bool) -> str:
+        return "OK" if ok else "NOT FOUND  <- check connections / config"
+
+    print("\n+- Device Probe -----------------------------------------------+")
+    print(f"|  USB Webcam  (CV2 index {CAMERA_INDEX})         : {_s(results['webcam'])}")
+    print(f"|  USB Microphone               : {_s(results['mic'])}")
+    bt_label = f"BT Speaker  ({BT_SPEAKER_ALSA_DEVICE})"
+    print(f"|  {bt_label:<30}: {_s(results['bt_speaker'])}")
+    print("+--------------------------------------------------------------+\n")
+
+    return results
+
 
 # ── Camera ─────────────────────────────────────────────────────────────────────
 
@@ -264,6 +351,9 @@ def main() -> None:
         sys.exit(1)
 
     groq_client = Groq(api_key=api_key)
+
+    # ── Device probe: webcam / USB mic / BT speaker ───────────────────────
+    probe_devices()
 
     cap = open_camera()
     if cap is None:

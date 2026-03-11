@@ -43,6 +43,21 @@ TTS_RATE          = 145   # words per minute
 LISTEN_TIMEOUT    = 5     # seconds to wait for speech before giving up
 PHRASE_TIME_LIMIT = 8     # max seconds of a single utterance
 
+# ── Audio Devices (Raspberry Pi) ─────────────────────────────────────────────
+# ALSA output device for the Bluetooth speaker paired via BlueZ/bluealsa.
+# Run `aplay -L` on the Pi to list available ALSA output devices and find yours.
+# Common values:
+#   "bluealsa"                                (default bluealsa sink)
+#   "bluealsa:DEV=AA:BB:CC:DD:EE:FF,PROFILE=a2dp"  (specific MAC + A2DP)
+#   "pulse"                                   (PulseAudio/PipeWire bridge)
+# Override at runtime with:  export BT_SPEAKER_ALSA_DEVICE=bluealsa
+BT_SPEAKER_ALSA_DEVICE = os.environ.get("BT_SPEAKER_ALSA_DEVICE", "bluealsa")
+
+# ALSA capture device for the USB microphone.
+# Auto-detection via PyAudio is attempted first; this is the fallback.
+# Override with e.g. "plughw:1,0" if auto-detection fails.
+USB_MIC_ALSA_DEVICE = os.environ.get("USB_MIC_ALSA_DEVICE", "default")
+
 # Max back-and-forth AI turns per emotion session
 CONVERSATION_LIMIT = 10
 
