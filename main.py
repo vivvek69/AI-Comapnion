@@ -53,7 +53,11 @@ from config import (
     CAMERA_INDEX,
     BT_SPEAKER_ALSA_DEVICE,
 )
+import warnings
+warnings.filterwarnings("ignore", message=".*tf.lite.Interpreter.*")
+warnings.filterwarnings("ignore", message=".*LiteRT.*")
 from emotion_detector import EmotionDetector, EMOTION_COLOURS
+import voice_io
 from voice_io import speak, listen
 from ai_companion import get_greeting, get_long_duration_message, get_ai_reply
 
@@ -350,6 +354,12 @@ def run_conversation(emotion: str, groq_client: Groq,
 # ── Main ────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    # Suppress Qt 'wayland plugin not found' warnings on Pi — xcb is correct
+    if IS_PI:
+        os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+        os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
+        os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         print("[ERROR] GROQ_API_KEY not set. Add it to your .env file.")
@@ -489,6 +499,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("[INFO] Interrupted.")
     finally:
+        voice_io.shutdown()   # kill any running espeak-ng proc immediately
         cap.release()
         cv2.destroyAllWindows()
         print("[INFO] Goodbye!")

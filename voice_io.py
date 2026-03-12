@@ -14,10 +14,12 @@ voice_io.py — Cross-platform Text-to-Speech and Speech-to-Text.
     SpeechRecognition's built-in Google engine.
 """
 
+import contextlib
 import os
 import platform
 import subprocess
 import tempfile
+import threading
 
 import speech_recognition as sr
 
@@ -27,6 +29,34 @@ IS_PI      = platform.machine() in ("armv7l", "aarch64")   # Raspberry Pi
 # ALSA output device for the Bluetooth speaker (Pi only).
 # Mirrors config.py — defined here to avoid a circular import.
 BT_SPEAKER_ALSA_DEVICE = os.environ.get("BT_SPEAKER_ALSA_DEVICE", "bluealsa")
+
+# ── Shutdown control ─────────────────────────────────────────────────────────
+_shutdown = threading.Event()            # set by shutdown() when the app exits
+_tts_proc: "subprocess.Popen | None" = None  # active espeak-ng proc (Pi only)
+
+
+@contextlib.contextmanager
+def _suppress_alsa():
+    """Redirect fd 2 to /dev/null to silence ALSA/JACK probe noise on Linux.
+
+    PyAudio enumerates every virtual ALSA device on init, printing dozens of
+    harmless 'Unknown PCM' lines.  These come from the C library so Python's
+    sys.stderr redirect has no effect — we must dup fd 2 at the OS level.
+    On Windows this is a no-op.
+    """
+    if IS_WINDOWS:
+        yield
+        return
+    fd  = os.open(os.devnull, os.O_WRONLY)
+    old = os.dup(2)
+    os.dup2(fd, 2)
+    os.close(fd)
+    try:
+        yield
+    finally:
+        os.dup2(old, 2)
+        os.close(old)
+
 
 # ── Mic detection keyword lists ──────────────────────────────────────────────
 # Devices whose names match any WEBCAM keyword are the webcam's built-in mic
@@ -65,7 +95,8 @@ def _find_standalone_usb_mic_pyaudio() -> int | None:
         _pa_mic_scanned = True
         return None
 
-    pa = pyaudio.PyAudio()
+    with _suppress_alsa():
+        pa = pyaudio.PyAudio()
     try:
         count = pa.get_device_count()
         print("[MIC/PA] Enumerating input devices via PyAudio:")
@@ -110,7 +141,8 @@ def _find_standalone_usb_mic_sr() -> int | None:
         return _sr_mic_index
 
     try:
-        names = sr.Microphone.list_microphone_names()
+        with _suppress_alsa():
+            names = sr.Microphone.list_microphone_names()
         print("[MIC/SR] Scanning available microphones:")
         for i, name in enumerate(names):
             name_lc       = name.lower()
@@ -150,9 +182,10 @@ def speak(text: str, rate: int = 145) -> None:
         engine.runAndWait()
         engine.stop()
     elif IS_PI:
+        if _shutdown.is_set():
+            return
         # Raspberry Pi — pipe espeak-ng stdout → aplay → Bluetooth speaker.
-        # espeak-ng --stdout writes raw PCM/WAV to stdout; aplay routes it to
-        # the BlueZ ALSA device (bluealsa) so audio reaches the BT speaker.
+        global _tts_proc
         espeak_cmd = ["espeak-ng", "-s", str(rate), "-v", "en+f3", "--stdout", text]
         try:
             espeak_proc = subprocess.Popen(
@@ -160,6 +193,10 @@ def speak(text: str, rate: int = 145) -> None:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
             )
+            _tts_proc = espeak_proc
+            if _shutdown.is_set():
+                espeak_proc.kill()
+                return
             aplay_result = subprocess.run(
                 ["aplay", "-D", BT_SPEAKER_ALSA_DEVICE, "-q"],
                 stdin=espeak_proc.stdout,
@@ -167,16 +204,22 @@ def speak(text: str, rate: int = 145) -> None:
             )
             espeak_proc.wait()
             if aplay_result.returncode != 0:
+                if _shutdown.is_set():
+                    return
                 err = aplay_result.stderr.decode(errors="replace").strip()
                 print(f"[TTS] BT speaker '{BT_SPEAKER_ALSA_DEVICE}' error: {err}")
                 print("[TTS] Falling back to default ALSA output")
-                subprocess.run(
+                fallback = subprocess.Popen(
                     ["espeak-ng", "-s", str(rate), "-v", "en+f3", text],
-                    check=False,
+                    stderr=subprocess.DEVNULL,
                 )
+                _tts_proc = fallback
+                fallback.wait()
         except FileNotFoundError as exc:
             print(f"[TTS] Command not found ({exc}) — install with:")
             print("  sudo apt install espeak-ng alsa-utils")
+        finally:
+            _tts_proc = None
     else:
         # Generic Linux desktop — en+f3 = English female voice; -s = speed (wpm)
         subprocess.run(
@@ -207,8 +250,10 @@ def listen(groq_client, whisper_model: str,
             mic_index = _find_standalone_usb_mic_sr()
     else:
         mic_index = _find_standalone_usb_mic_sr()
+    if _shutdown.is_set():
+        return ""
     try:
-        with sr.Microphone(device_index=mic_index) as source:
+        with _suppress_alsa(), sr.Microphone(device_index=mic_index) as source:
             print("\n[LISTENING] Adjusting for ambient noise…")
             recognizer.adjust_for_ambient_noise(source, duration=0.4)
             print(f"[LISTENING] *** Speak now  (up to {phrase_limit}s) ***")
@@ -246,3 +291,19 @@ def listen(groq_client, whisper_model: str,
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
+
+
+def shutdown() -> None:
+    """Stop all voice I/O immediately.  Call this on application exit.
+
+    Sets the shutdown event so speak() and listen() return without doing
+    anything, and kills the active espeak-ng subprocess (if any) so no
+    queued TTS plays after the main loop exits.
+    """
+    _shutdown.set()
+    proc = _tts_proc
+    if proc is not None:
+        try:
+            proc.kill()
+        except Exception:
+            pass
